@@ -1271,6 +1271,10 @@
                 ]
               },
               {
+                "group": "Applied guides",
+                "pages": ["reference/probabilistic-investing-openclaw"]
+              },
+              {
                 "group": "Concept internals",
                 "pages": [
                   "concepts/typebox",
