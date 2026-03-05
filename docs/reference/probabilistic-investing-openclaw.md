@@ -1,63 +1,105 @@
-# Ứng dụng tư duy xác suất trong hệ thống phân tích đầu tư và thiết lập OpenClaw
+# OpenClaw cho Swing Trader Việt Nam với tư duy xác suất
 
-## Mục tiêu
+## Mục tiêu của tài liệu
 
-Tài liệu này mô tả cách vận hành OpenClaw theo hướng ra quyết định dựa trên phân phối kết quả (probabilistic thinking), thay vì dự đoán một kịch bản duy nhất.
+Tài liệu này tối ưu cho **một Swing Trader cá nhân** (giữ lệnh vài ngày đến vài tuần), không phải hệ thống quỹ lớn. Mục tiêu là giúp bạn vận hành OpenClaw theo quy trình gọn, kỷ luật, và có thể kiểm chứng:
 
-Khung áp dụng tập trung vào bốn trụ cột:
+1. Chọn cơ hội theo **xác suất + kịch bản** thay vì đoán cảm tính.
+2. Quản trị vốn theo **R, drawdown, portfolio heat**.
+3. Theo dõi lệnh theo **state machine** rõ ràng (WATCH → IN_POSITION → EXITED).
+4. Tạo **audit trail** để biết vì sao vào lệnh, vì sao thoát, và vì sao sai.
 
-1. **Xác suất và kỳ vọng**: mọi quyết định phải có kịch bản, xác suất, payoff theo R, và EV.
-2. **Kỷ luật rủi ro**: kích thước vị thế, portfolio heat, drawdown guardrail, risk-off.
-3. **Tâm lý giao dịch**: chống overconfidence, recency bias, gambler's fallacy, disposition effect.
-4. **Vận hành hệ thống**: logging, audit, kiểm định calibration, kiểm soát execution và safety cho LLM.
+## Phạm vi tối giản cho nhà đầu tư cá nhân
 
-## Nguyên tắc vận hành bắt buộc
+Dùng kiến trúc 5 lớp là đủ mạnh:
 
-- Mọi ý tưởng giao dịch phải có ít nhất 3 kịch bản: **Bull / Base / Bear**.
-- Tổng xác suất các kịch bản phải bằng 100%.
-- Mỗi kịch bản cần có:
-  - trigger,
-  - invalidation,
-  - target theo R,
-  - time window.
-- Bắt buộc tính:
-  - `EV_gross = Σ(p_i * R_i)`,
-  - `EV_net = EV_gross - transaction_costs`.
-- Nếu không đủ dữ liệu để định lượng xác suất hoặc payoff: phải ghi rõ giả định và độ nhạy của kết luận.
+- **Data**: Vnstock Gold/Golden + nguồn chính thức (HOSE/HNX/VSDC) cho sự kiện quan trọng.
+- **Feature**: EMA, ATR, RSI, MACD, Rolling VWAP, CVD (nếu có intraday đủ tốt).
+- **Signal**: kịch bản Bull/Base/Bear cho D1/H4/H1.
+- **Risk**: sizing theo risk%, giới hạn drawdown, giới hạn heat.
+- **Ops**: checklist ngày/tuần, log quyết định, review sau lệnh.
 
-## Công thức cốt lõi
+Không cần hạ tầng “mini-fund” nếu bạn chỉ giao dịch một danh mục nhỏ.
 
-### 1) Position sizing theo fixed risk
+## Khung quyết định xác suất cho Swing
+
+Mỗi ý tưởng giao dịch bắt buộc có:
+
+- 3 kịch bản: **Bull / Base / Bear**.
+- Xác suất tổng = 100%.
+- Trigger + invalidation + time window.
+- Payoff theo R và EV.
 
 ```text
-risk_amount = NAV * risk%
+EV_gross = Σ(p_i * R_i)
+EV_net   = EV_gross - costs
+```
+
+Trong đó `costs` gồm phí + trượt giá ước tính.
+
+### Quy tắc vào lệnh tối thiểu
+
+- Chỉ xem xét lệnh khi `EV_net > 0`.
+- Nếu dữ liệu thiếu hoặc mâu thuẫn: không vào lệnh.
+- Không dùng ngôn ngữ “chắc chắn”; chỉ dùng phát biểu có điều kiện.
+
+## Bộ chỉ báo và công thức dùng thực chiến
+
+Các chỉ báo đủ dùng cho Swing Việt Nam:
+
+- EMA: 34 / 89 / 200 (xác nhận cấu trúc xu hướng).
+- ATR(14): chuẩn hóa stop theo biến động.
+- RSI(14): đọc động lượng và trạng thái quá mua/quá bán theo ngữ cảnh trend.
+- MACD(12,26,9): xác nhận động lượng và chất lượng nhịp.
+- Rolling VWAP(21): vùng giá trị động cho pullback.
+- CVD: chỉ bật khi dữ liệu intraday đủ ổn định.
+
+Công thức sizing cơ bản:
+
+```text
+risk_amount   = NAV * risk%
 position_size = risk_amount / stop_distance
 ```
 
-Trong đó `stop_distance` phải là stop có cấu trúc (structure/ATR), không dùng stop tùy ý.
+`stop_distance` phải đến từ cấu trúc giá hoặc ATR, không đặt tùy hứng.
 
-### 2) Bayesian update
+## Multi-timeframe rule cho D1/H4/H1
 
-```text
-P(H1|E) = P(H1)P(E|H1) / [P(H1)P(E|H1) + P(H0)P(E|H0)]
-```
+### D1 (bối cảnh)
 
-Khi có `NEW_INFO`, phải cập nhật xác suất, EV và hành động tương ứng.
+- Ưu tiên long khi `Close > EMA200` và `EMA34 > EMA89`.
+- Loại mã ATR% quá thấp (không có biên) hoặc quá cao (rủi ro gap lớn).
 
-### 3) Utility-adjusted EV (cho hồ sơ loss-averse)
+### H4 (setup)
 
-```text
-v(R) = R^α              nếu R >= 0
-v(R) = -λ|R|^α          nếu R < 0
-EU   = Σ(p_i * v(R_i))
-```
+- Pullback về EMA34 hoặc Rolling VWAP(21) trong bối cảnh D1 thuận.
+- Hoặc breakout khỏi vùng tích lũy có volume xác nhận.
 
-Luật khuyến nghị:
+### H1 (trigger)
 
-- `EU < 0` => **NO-TRADE** hoặc yêu cầu cấu trúc payoff tốt hơn.
-- `EU >= 0` nhưng vi phạm heat/drawdown => **ALLOW-REDUCED** hoặc **BLOCK**.
+- Chỉ kích hoạt khi có tín hiệu entry rõ (reclaim, break cấu trúc nhỏ, hoặc momentum xác nhận).
+- Nếu dùng CVD thì chỉ coi là tín hiệu phụ, không thay thế cấu trúc giá.
 
-## Rule engine rủi ro
+## Tích hợp Vnstock Gold cho OpenClaw
+
+### Nguồn dữ liệu ưu tiên
+
+1. Vnstock cho OHLCV/intraday/news/pipeline.
+2. HOSE/HNX/VSDC để xác minh corporate actions và công bố quan trọng.
+
+### Quy tắc vận hành dữ liệu
+
+- Lưu song song `raw` và `adjusted`.
+- Gắn `data_quality_flag` cho missing bar, outlier, schema mismatch.
+- Nếu feed intraday lỗi: hạ hệ thống về chế độ D1/H4 thay vì cố trade H1.
+
+### Rate limit và ổn định pipeline
+
+- Dùng cache + retry + exponential backoff cho job ingest.
+- Tách job theo lớp: EOD, intraday, corporate actions.
+- Không gọi API quá dày chỉ để “refresh cảm giác”.
+
+## Risk engine gọn cho Swing Trader
 
 Thiết lập tham số runtime:
 
@@ -66,84 +108,120 @@ Thiết lập tham số runtime:
 - `portfolio_heat_cap={X}%`
 - `max_drawdown_trigger={Y}%`
 
-Policy gợi ý:
+Rule khuyến nghị:
 
-- **Soft stop**: DD tuần vượt ngưỡng => giảm risk/trade xuống 50%.
-- **Hard stop**: DD tháng vượt ngưỡng => dừng execution thật, chuyển paper/shadow.
-- **Cluster/correlation control**: nếu heat theo cụm đã chạm ngưỡng => chặn hoặc giảm size lệnh mới trong cùng cụm.
+- Nếu DD vượt ngưỡng tuần: giảm risk/trade 50%.
+- Nếu DD vượt ngưỡng tháng: chuyển paper/shadow, dừng lệnh thật.
+- Nếu tổng heat vượt `X%`: không mở thêm vị thế cùng hướng.
 
-## Bộ prompt mẫu cho OpenClaw
+## Luồng vận hành hằng ngày
+
+### Trước phiên
+
+- Cập nhật dữ liệu D1/H4/H1 và kiểm tra data quality.
+- Đối chiếu corporate actions/tin công bố trọng yếu.
+- Tạo danh sách Top 10 và phát assignment chấm điểm.
+
+### Trong phiên
+
+- Chỉ xử lý mã đã pass hard filter.
+- Chỉ gửi đề xuất khi có trigger và risk gate pass.
+
+### Sau phiên
+
+- Cập nhật trạng thái vị thế.
+- Ghi log: quyết định, giá vào/ra, lý do, sai lệch so với plan.
+- Tạo review ngắn cho lệnh đóng.
+
+## Template chấm điểm Top 10
+
+Mỗi mã cần một `evidence pack` gồm:
+
+- chart D1/H4/H1 có đánh dấu vùng setup,
+- score breakdown,
+- risk plan (entry/stop/size/heat impact),
+- link tin/công bố liên quan,
+- kết luận hành động: WATCH / ENTER / NO-TRADE.
+
+Gợi ý trọng số:
+
+- Trend D1: 30%
+- Setup H4: 25%
+- Trigger H1: 15%
+- Liquidity/slippage: 10%
+- Risk quality (R:R, stop logic): 15%
+- Event risk (tin/corporate actions): 5%
+
+## Prompt mẫu cho OpenClaw
 
 ### System prompt
 
 ```text
-Bạn là Openclaw, một hệ thống phân tích và hỗ trợ giao dịch theo Tư duy Xác suất.
+Bạn là OpenClaw hỗ trợ Swing Trading cho thị trường Việt Nam.
 
 Luật bắt buộc:
 1) Luôn xuất Bull/Base/Bear, tổng xác suất 100%.
-2) Luôn có trigger, invalidation, target (R), time window.
-3) Luôn tính EV_gross, EV_net và ghi rõ giả định.
+2) Luôn có trigger, invalidation, time window.
+3) Luôn tính EV_gross, EV_net.
 4) Dùng NAV={NAV}, risk%={risk%}, heat cap={X}%, DD trigger={Y}%.
-5) Khi có {NEW_INFO}, phải cập nhật xác suất theo Bayes hoặc heuristic có log.
-6) Cấm ngôn ngữ chắc chắn; chỉ dùng phát biểu có điều kiện.
-7) Nếu thiếu dữ liệu hoặc dữ liệu mâu thuẫn, hỏi tối đa 3 câu hỏi làm rõ.
+5) Nếu dữ liệu thiếu/mâu thuẫn thì NO-TRADE hoặc hỏi tối đa 3 câu.
+6) Không dùng ngôn ngữ chắc chắn.
 ```
 
-### Pre-trade checklist prompt
+### Top 10 scoring prompt
 
 ```text
-Pre-trade checklist cho {TICKER}:
+Đầu vào: danh sách Top 10 mã cổ phiếu.
 
-1) Kịch bản Bull/Base/Bear đầy đủ và tổng xác suất = 100%?
-2) EV_net > 0 sau phí + trượt giá giả định?
-3) Stop logic hợp lệ (structure/ATR)?
-4) Lệnh mới có làm heat vượt {X}% hoặc vi phạm drawdown rule {Y}% không?
-5) Có dấu hiệu bias hành vi (overconfidence/recency/gambler/disposition) không?
-
-Kết luận: ENTER / ENTER-REDUCED / NO-TRADE.
+Với mỗi mã {TICKER}, xuất:
+- Điểm theo 6 nhóm: Trend D1, Setup H4, Trigger H1, Liquidity, Risk quality, Event risk.
+- Kịch bản Bull/Base/Bear + xác suất.
+- Plan: entry, stop, size theo NAV={NAV}, risk%={risk%}.
+- Tác động heat danh mục (cap={X}%).
+- Kết luận: WATCH / ENTER / NO-TRADE.
 ```
 
-### Bayesian update prompt
+### Position monitoring prompt
 
 ```text
-Cập nhật cho {TICKER} với NEW_INFO={NEW_INFO}:
+Theo dõi vị thế {TICKER} sau khi đã vào lệnh.
 
-1) Nhắc lại xác suất cũ Bull/Base/Bear.
-2) Trích xuất evidence E (price/volume/flow/news/structure).
-3) Cập nhật xác suất (Bayes nếu có likelihood, nếu không dùng heuristic có log giả định).
-4) Nếu invalidation xuất hiện: đặt p kịch bản đó = 0.
-5) Cập nhật EV_net và hành động: HOLD / ENTER / REDUCE / EXIT / NO-TRADE.
+Yêu cầu:
+1) Cập nhật trạng thái: IN_POSITION / RISK_OFF / EXIT_SIGNAL.
+2) So sánh giá hiện tại với stop/trailing/target.
+3) Nếu có NEW_INFO={NEW_INFO}, cập nhật xác suất và EV_net.
+4) Đề xuất hành động: HOLD / REDUCE / EXIT.
 ```
 
-## Logging và audit tối thiểu
+## Logging và audit bắt buộc
 
 Mỗi quyết định phải lưu:
 
-- input dữ liệu (timestamp, nguồn, độ trễ),
-- bản tóm tắt feature,
-- kịch bản + xác suất + EV/EU,
-- risk checks (heat, DD, limits),
-- hành động cuối,
-- phiên bản model/prompt/config,
-- lý do override (nếu có).
+- timestamp + dữ liệu nguồn,
+- snapshot feature,
+- kịch bản + xác suất + EV,
+- risk check kết quả,
+- hành động cuối cùng,
+- strategy version/prompt version,
+- override reason (nếu có).
 
-## Checklist kiểm thử trước khi chạy thật
+## Checklist kiểm thử tối thiểu
 
-1. **Data integrity**: missing/outlier/timestamp drift/corporate actions.
-2. **Probability quality**: Brier score, calibration theo rolling window.
-3. **Backtest robustness**: walk-forward, giới hạn số lần tuning.
-4. **Execution safety**: pre-trade controls, throttle, kill-switch.
-5. **LLM safety**: test prompt injection trực tiếp/gián tiếp, kiểm soát output handling.
+1. Data integrity: thiếu bar, outlier, timestamp lệch.
+2. Backtest hygiene: walk-forward, không leakage.
+3. Cost realism: có phí + slippage trong EV_net.
+4. Risk control: test drawdown switch và heat gate.
+5. Ops resilience: test retry/backoff và chế độ degraded.
 
-## Roadmap triển khai gợi ý
+## Roadmap triển khai gọn trong 4 giai đoạn
 
-- **Giai đoạn 1 (2-4 tuần)**: data pipeline, feature store, logging, paper mode.
-- **Giai đoạn 2 (3-6 tuần)**: scenario engine, calibration, Brier dashboard.
-- **Giai đoạn 3 (2-4 tuần)**: risk engine (heat/correlation/drawdown), risk override.
-- **Giai đoạn 4 (2-6 tuần)**: security hardening, red-team LLM, governance và rollout có gate.
+- **Giai đoạn 1 (1-2 tuần)**: chuẩn hóa ingest + lưu raw/adjusted + báo cáo data quality.
+- **Giai đoạn 2 (2-4 tuần)**: feature/signal D1-H4-H1 + Top10 scoring report.
+- **Giai đoạn 3 (1-2 tuần)**: risk gate (size/heat/DD) + journal + post-trade review.
+- **Giai đoạn 4 (2-3 tuần)**: monitor/alerts + semi-auto execution checklist.
 
-## Ghi chú triển khai
+## Kết luận thực dụng
 
-- Nếu chưa có API execution, vận hành ở paper/shadow trước.
-- Không tự động tăng rủi ro sau chuỗi thắng/thua.
-- Chỉ cho phép override khi có bằng chứng dữ liệu mới và phải audit được.
+Nếu bạn là Swing Trader nhỏ lẻ, hệ thống tốt nhất không phải hệ phức tạp nhất; đó là hệ thống mà bạn chạy đều mỗi ngày, kỷ luật rủi ro nhất quán, và có log để học từ sai lầm.
+
+OpenClaw nên đóng vai trò **orchestrator + trợ lý phân tích có kiểm soát**, còn quyết định vốn thật vẫn nằm ở bạn theo mô hình human-in-the-loop.
